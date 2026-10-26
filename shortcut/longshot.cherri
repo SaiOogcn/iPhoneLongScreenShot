@@ -1,0 +1,30 @@
+#define name 长截图
+#define color green
+#define glyph photoStackAlt
+#define inputs media
+#define outputs image
+#define from sharesheet
+#define noinput askfor media
+#define version 18.4
+
+#include 'actions/photos'
+#include 'actions/web'
+
+// Use the shared recording when launched from Photos; otherwise iOS asks for
+// one media item because of the noinput definition above.
+@video = ShortcutInput
+
+const result = formRequest(
+    // Replace this with the address of your Longshot server before compiling.
+    "http://YOUR_SERVER:8787/api/stitch",
+    "POST",
+    {
+        "file": "{@video}",
+        "quality": "balanced",
+        "format": "jpg",
+        "mode": "video"
+    }
+)
+
+savePhoto(result)
+quicklook(result)
