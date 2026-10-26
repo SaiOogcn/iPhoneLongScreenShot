@@ -98,6 +98,64 @@ def _save_uploads(uploads, directory: Path) -> list[Path]:
     return saved
 
 
+def _raw_body_suffix(content_type: str, mode: str, head: bytes) -> str:
+    """Choose a filename extension for a request body sent as a raw file."""
+    mimetype = content_type.split(";", 1)[0].strip().lower()
+    if mimetype in {"video/quicktime", "video/mov"}:
+        return ".mov"
+    if mimetype in {"video/mp4", "video/x-m4v"}:
+        return ".mp4"
+    if mimetype.startswith("video/"):
+        return ".mov"
+    if mimetype in {"image/jpeg", "image/jpg"}:
+        return ".jpg"
+    if mimetype == "image/png":
+        return ".png"
+    if mimetype in {"image/heic", "image/heif"}:
+        return ".heic"
+    if mimetype == "image/webp":
+        return ".webp"
+    if mimetype in {"application/zip", "application/x-zip-compressed"}:
+        return ".zip"
+
+    if head.startswith(b"\x89PNG\r\n\x1a\n"):
+        return ".png"
+    if head.startswith(b"\xff\xd8\xff"):
+        return ".jpg"
+    if head.startswith(b"PK\x03\x04"):
+        return ".zip"
+    if len(head) >= 12 and head[4:8] == b"ftyp":
+        brand = head[8:12]
+        return ".mp4" if brand in {b"isom", b"mp41", b"mp42", b"avc1"} else ".mov"
+    return ".mov" if mode == "video" else ".bin"
+
+
+def _save_raw_body(directory: Path, mode: str) -> Path:
+    """Stream a non-multipart request body to disk for Shortcuts file uploads."""
+    if not request.content_length:
+        raise LongshotError("没有收到文件。请上传录屏、截图或 zip。")
+
+    path = directory / "upload-body"
+    head = b""
+    with path.open("wb") as handle:
+        while True:
+            chunk = request.stream.read(1024 * 1024)
+            if not chunk:
+                break
+            if len(head) < 32:
+                head += chunk[: 32 - len(head)]
+            handle.write(chunk)
+
+    if path.stat().st_size == 0:
+        path.unlink(missing_ok=True)
+        raise LongshotError("上传的文件为空。")
+
+    suffix = _raw_body_suffix(request.content_type or "", mode, head)
+    final_path = path.with_suffix(suffix)
+    path.replace(final_path)
+    return final_path
+
+
 def _meta_header(meta: dict) -> str:
     raw = json.dumps(meta, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
     return base64.urlsafe_b64encode(raw).decode("ascii")
@@ -171,8 +229,15 @@ def longshot_shortcut():
 def stitch():
     uploads = request.files.getlist("file") + request.files.getlist("files")
     uploads = [upload for upload in uploads if upload and upload.filename]
+    requested_mode = (request.form.get("mode") or request.args.get("mode") or "auto").lower()
+    raw_body = bool(request.content_length) and request.mimetype != "multipart/form-data"
     if not uploads:
-        raise LongshotError("没有收到文件。请用表单字段 file 上传录屏、截图或 zip。")
+        if not raw_body:
+            if request.form.get("file"):
+                raise LongshotError(
+                    "快捷指令把文件当成了文本发送。请删除旧快捷指令，重新导入最新版。"
+                )
+            raise LongshotError("没有收到文件。请上传录屏、截图或 zip。")
 
     if not PROCESS_LOCK.acquire(blocking=False):
         raise LongshotError("服务器正在处理另一个长截图，请稍后重试。", status=429)
@@ -184,8 +249,7 @@ def stitch():
         WORK_DIR.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(prefix="longshot-request-", dir=WORK_DIR) as tmp:
             root = Path(tmp)
-            saved = _save_uploads(uploads, root)
-            requested_mode = (request.form.get("mode") or request.args.get("mode") or "auto").lower()
+            saved = _save_uploads(uploads, root) if uploads else [_save_raw_body(root, requested_mode)]
             suffixes = [path.suffix.lower() for path in saved]
             has_video = any(suffix in VIDEO_EXTENSIONS for suffix in suffixes)
             has_zip = any(suffix == ".zip" for suffix in suffixes)

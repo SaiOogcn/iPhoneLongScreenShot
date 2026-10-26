@@ -56,6 +56,32 @@ def test_video_upload_api(tmp_path: Path) -> None:
     assert meta["selected_frames"] >= 2
 
 
+def test_raw_video_body_upload_api(tmp_path: Path) -> None:
+    video = make_video(tmp_path / "raw-demo.mp4", seconds=3.5, scroll_px=1800)
+    client = app.test_client()
+    response = client.post(
+        "/api/stitch?mode=video&quality=compact",
+        data=video.read_bytes(),
+        content_type="application/octet-stream",
+    )
+    assert response.status_code == 200, response.get_data(as_text=True)
+    assert response.content_type == "image/jpeg"
+    meta = decode_meta(response)
+    assert meta["mode"] == "video"
+    assert meta["selected_frames"] >= 2
+
+
+def test_text_file_form_returns_actionable_error() -> None:
+    client = app.test_client()
+    response = client.post(
+        "/api/stitch",
+        data={"file": "not-a-file", "mode": "video"},
+        content_type="multipart/form-data",
+    )
+    assert response.status_code == 400
+    assert "重新导入最新版" in response.get_json()["error"]
+
+
 def test_multi_image_upload_api(tmp_path: Path) -> None:
     paths = make_screenshots(
         [tmp_path / f"api-shot-{index}.png" for index in range(3)],

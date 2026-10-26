@@ -19,7 +19,7 @@ Longshot 是一个自托管的 iPhone 长截图工具。它不需要安装第二
 - 支持向上滚动后的阅读顺序恢复
 - 支持 JPEG/PNG、三档输出宽度和自定义上下裁剪
 - 支持视频、多张截图或图片 zip 上传
-- 提供网页界面和 `multipart/form-data` API
+- 提供网页界面，以及支持原始文件上传或 `multipart/form-data` 的 API
 - 可选生成 iOS 快捷指令，从照片分享菜单直接上传
 
 ## 工作原理
@@ -29,7 +29,7 @@ iPhone 系统录屏
       │
       ▼
 快捷指令 / Safari 上传
-      │  multipart/form-data
+      │  原始文件请求体 / multipart
       ▼
 Longshot 服务器
   ├─ OpenCV 解码与抽帧
@@ -160,11 +160,10 @@ export LONGSHOT_MAX_UPLOAD_MB=600
    - 筛选：视频
    - 选择多个：关闭
 2. **获取 URL 内容**
-   - URL：`http://<服务器IP>:8787/api/stitch`
+   - URL：`http://<服务器IP>:8787/api/stitch?mode=video&quality=balanced&format=jpg`
    - 方法：`POST`
-   - 请求体：`表单`
-   - 新字段：键 `file`，类型 `文件`，值选上一步的照片
-   - 可选字段：键 `quality`，类型 `文本`，值 `balanced`
+   - 请求体：`文件`
+   - 文件：选第一步得到的视频
 3. **存储到照片相簿**
    - 输入：“URL 内容”
    - 相簿：“最近项目”
@@ -173,12 +172,14 @@ export LONGSHOT_MAX_UPLOAD_MB=600
 
 如果希望从照片分享菜单直接运行，在快捷指令详情中打开“在共享表单中显示”，并把接收类型设为“媒体”。
 
+请求体必须选“文件”，不能选“表单”。把视频放进表单字段时，iOS 可能把视频转换成文本变量，服务器就会收到一个名为 `file` 的文本值而不是视频内容。
+
 ### 方式 B：编译项目内的 Cherri 源码
 
-`shortcut/longshot.cherri` 是快捷指令源码。先把占位地址替换成你的服务器地址：
+`shortcut/longshot.cherri` 是快捷指令源码。它使用“获取 URL 内容”的“文件”请求体直接上传视频，不经过表单字段。先把占位地址替换成你的服务器地址：
 
 ```cherri
-"http://YOUR_SERVER:8787/api/stitch"
+"http://YOUR_SERVER:8787/api/stitch?mode=video&quality=balanced&format=jpg"
 ```
 
 安装 [Cherri](https://github.com/electrikmilk/cherri) 后编译：
@@ -232,11 +233,27 @@ Safari 如果只把快捷指令下载成文件，打开“文件”App 点一下
 
 ### `POST /api/stitch`
 
-请求类型：`multipart/form-data`。
+支持两种上传方式：
+
+1. **原始文件请求体**：请求体直接是视频或图片的文件内容，适合快捷指令。推荐在 URL 查询参数中传选项。
+2. **`multipart/form-data`**：适合网页表单、`curl -F` 或其他常规客户端。
+
+原始文件示例：
+
+```bash
+curl -f 'http://192.168.1.20:8787/api/stitch?mode=video&quality=balanced&format=jpg' \
+  -H 'Content-Type: video/quicktime' \
+  --data-binary @screen-recording.mov \
+  -o longshot.jpg
+```
+
+服务会根据 `Content-Type` 和文件头识别扩展名；无法识别时，`mode=video` 会按视频处理。一次原始文件请求只能上传一个文件。多张截图或 zip 请使用 `multipart/form-data`。
+
+表单字段：
 
 | 字段 | 必需 | 说明 |
 | --- | --- | --- |
-| `file` | 是 | 一个视频、多张图片，或一个图片 zip；该字段可重复 |
+| `file` | 是 | 一个视频、多张图片，或一个图片 zip；该字段可重复。使用原始文件请求体时不需要此字段 |
 | `mode` | 否 | `auto`、`video`、`images`，默认 `auto` |
 | `quality` | 否 | `compact`、`balanced`、`high`，默认 `balanced` |
 | `format` | 否 | `jpg` 或 `png`，默认 `jpg` |
@@ -338,6 +355,8 @@ tail -f longshot.log
 **快捷指令返回 JSON 而不是图片**
 
 通常是服务报错、文件格式不对或处理超时。把同一段录屏上传到网页端，可以查看完整的中文错误信息。
+
+如果错误是“没有收到文件”或“快捷指令把文件当成了文本发送”，说明导入的仍是旧版表单上传快捷指令。删除旧快捷指令，从服务首页重新导入；手动创建时确认“请求体”选的是“文件”，不是“表单”。
 
 **长图错位、重复或缺少内容**
 

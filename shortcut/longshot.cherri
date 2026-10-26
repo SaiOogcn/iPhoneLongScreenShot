@@ -8,22 +8,31 @@
 #define version 18.4
 
 #include 'actions/photos'
-#include 'actions/web'
+
+enum HTTPMethod {
+    'POST',
+    'PUT'
+}
+
+// Send a media item as the raw HTTP request body. This keeps iOS from
+// converting the video into a text value inside a form upload.
+action 'downloadurl' uploadFile(
+    text url: 'WFURL',
+    HTTPMethod ?method: 'WFHTTPMethod',
+    variable ?body: 'WFRequestVariable'
+) {
+    "WFHTTPBodyType": "File"
+}
 
 // Use the shared recording when launched from Photos; otherwise iOS asks for
 // one media item because of the noinput definition above.
 @video = ShortcutInput
 
-const result = formRequest(
-    // Replace this with the address of your Longshot server before compiling.
-    "http://YOUR_SERVER:8787/api/stitch",
+// Replace this with the address of your Longshot server before compiling.
+const result = uploadFile(
+    "http://YOUR_SERVER:8787/api/stitch?mode=video&quality=balanced&format=jpg",
     "POST",
-    {
-        "file": "{@video}",
-        "quality": "balanced",
-        "format": "jpg",
-        "mode": "video"
-    }
+    @video
 )
 
 savePhoto(result)
